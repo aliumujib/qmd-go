@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"unsafe"
 
@@ -34,15 +35,14 @@ var (
 
 func findLibPath() string {
 	libPathOnce.Do(func() {
-		// Try build directory first (for development)
 		candidates := []string{
-			"llama-go/build/libllama_go.so",    // Linux build dir
-			"llama-go/build/llama_go.dll",      // Windows build dir
-			"llama-go/build/libllama_go.dylib", // macOS build dir
-			"libllama_go.so",                   // Linux current dir
-			"llama_go.dll",                     // Windows current dir
-			"libllama_go.dylib",                // macOS current dir
-			"/usr/lib/libllama_go.so",          // Linux system
+			"llama-go/build/libllama_go.so",
+			"llama-go/build/llama_go.dll",
+			"llama-go/build/libllama_go.dylib",
+			"libllama_go.so",
+			"llama_go.dll",
+			"libllama_go.dylib",
+			"/usr/lib/libllama_go.so",
 			"/usr/local/lib/libllama_go.so",
 		}
 		if env := os.Getenv("LLAMA_GO_LIB"); env != "" {
@@ -54,7 +54,6 @@ func findLibPath() string {
 				return
 			}
 		}
-		// Try relative to executable
 		if exe, err := os.Executable(); err == nil {
 			exeDir := filepath.Dir(exe)
 			for _, name := range []string{"libllama_go.so", "llama_go.dll", "libllama_go.dylib"} {
@@ -69,10 +68,31 @@ func findLibPath() string {
 	return libPath
 }
 
+func findLibDir() string {
+	p := findLibPath()
+	if p == "" {
+		return ""
+	}
+	return filepath.Dir(p)
+}
+
 func newPuregoClient(model string) (LLM, error) {
 	libPath := findLibPath()
 	if libPath == "" {
 		return nil, fmt.Errorf("llama_go shared library not found (set LLAMA_GO_LIB or place libllama_go.so in PATH)")
+	}
+
+	libDir := findLibDir()
+	if libDir != "" {
+		for _, dep := range []string{
+			"libggml-base.dylib", "libggml.dylib", "libggml-cpu.dylib",
+			"libggml-blas.dylib", "libggml-metal.dylib", "libllama.dylib",
+		} {
+			depPath := filepath.Join(libDir, dep)
+			if _, err := os.Stat(depPath); err == nil {
+				purego.Dlopen(depPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+			}
+		}
 	}
 
 	lib, err := purego.Dlopen(libPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
@@ -103,8 +123,14 @@ func newPuregoClient(model string) (LLM, error) {
 	}
 
 	pathBytes := []byte(path)
-	pathBytes = append(pathBytes, 0)           // null terminator
-	modelPtr := loadFn(&pathBytes[0], 2048, 0) // n_ctx=2048, n_gpu_layers=0
+	pathBytes = append(pathBytes, 0) // null terminator
+	nGpuLayers := -1
+	if env := os.Getenv("LLAMA_GO_GPU_LAYERS"); env != "" {
+		if v, err := strconv.Atoi(env); err == nil {
+			nGpuLayers = v
+		}
+	}
+	modelPtr := loadFn(&pathBytes[0], 2048, nGpuLayers)
 	if modelPtr == nil {
 		if errMsg := getErrorFn(); errMsg != "" {
 			return nil, fmt.Errorf("load model: %s", errMsg)
