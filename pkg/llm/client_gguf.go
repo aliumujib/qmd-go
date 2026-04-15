@@ -1,4 +1,4 @@
-//go:build gguf
+//go:build gguf && cgo_gguf
 
 package llm
 
