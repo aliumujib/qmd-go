@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ba0f3/qmd-go/internal/llm"
-	"github.com/ba0f3/qmd-go/internal/store"
+	"github.com/aliumujib/qmd-go/pkg/llm"
+	"github.com/aliumujib/qmd-go/pkg/store"
 	"github.com/spf13/cobra"
 )
 

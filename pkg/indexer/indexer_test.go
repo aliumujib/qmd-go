@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ba0f3/qmd-go/internal/store"
+	"github.com/aliumujib/qmd-go/pkg/store"
 )
 
 func TestIndexFiles(t *testing.T) {

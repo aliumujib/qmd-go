@@ -10,7 +10,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/ba0f3/qmd-go/internal/huggingface"
+	"github.com/aliumujib/qmd-go/pkg/huggingface"
 	"github.com/ebitengine/purego"
 )
 

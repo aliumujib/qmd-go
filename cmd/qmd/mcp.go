@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ba0f3/qmd-go/internal/config"
-	"github.com/ba0f3/qmd-go/internal/llm"
-	"github.com/ba0f3/qmd-go/internal/store"
+	"github.com/aliumujib/qmd-go/pkg/config"
+	"github.com/aliumujib/qmd-go/pkg/llm"
+	"github.com/aliumujib/qmd-go/pkg/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )

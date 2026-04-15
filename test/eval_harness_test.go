@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ba0f3/qmd-go/internal/indexer"
-	"github.com/ba0f3/qmd-go/internal/store"
+	"github.com/aliumujib/qmd-go/pkg/indexer"
+	"github.com/aliumujib/qmd-go/pkg/store"
 )
 
 const evalCollection = "eval-docs"

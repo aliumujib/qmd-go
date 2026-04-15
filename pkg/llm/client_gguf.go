@@ -8,7 +8,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/ba0f3/qmd-go/internal/huggingface"
+	"github.com/aliumujib/qmd-go/pkg/huggingface"
 	llama "github.com/go-skynet/go-llama.cpp"
 )
 

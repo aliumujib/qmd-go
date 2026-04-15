@@ -1,4 +1,4 @@
-module github.com/ba0f3/qmd-go
+module github.com/aliumujib/qmd-go
 
 go 1.23.0
 

@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ba0f3/qmd-go/internal/config"
-	"github.com/ba0f3/qmd-go/internal/indexer"
+	"github.com/aliumujib/qmd-go/pkg/config"
+	"github.com/aliumujib/qmd-go/pkg/indexer"
 	"github.com/spf13/cobra"
 )
 

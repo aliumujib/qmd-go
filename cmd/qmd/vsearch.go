@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ba0f3/qmd-go/internal/config"
-	"github.com/ba0f3/qmd-go/internal/llm"
+	"github.com/aliumujib/qmd-go/pkg/config"
+	"github.com/aliumujib/qmd-go/pkg/llm"
 	"github.com/spf13/cobra"
 )
 

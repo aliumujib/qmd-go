@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ba0f3/qmd-go/internal/store"
+	"github.com/aliumujib/qmd-go/pkg/store"
 	"github.com/bmatcuk/doublestar/v4"
 )
 
