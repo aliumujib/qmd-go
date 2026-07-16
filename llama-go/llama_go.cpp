@@ -1,4 +1,3 @@
-// C++ wrapper for llama.cpp embeddings (purego-compatible)
 #include "llama_go.h"
 #include "llama.h"
 #include <string>
@@ -6,12 +5,18 @@
 #include <mutex>
 #include <cstring>
 
-// Thread-local error storage
 thread_local std::string g_last_error;
 
 static void set_error(const char* msg) {
     g_last_error = msg ? msg : "unknown error";
 }
+
+struct llama_go_state {
+    llama_model* model;
+    llama_context* ctx;
+    int n_embd;
+    std::mutex mu;
+};
 
 extern "C" {
 
@@ -24,15 +29,32 @@ LlamaGoModel llama_go_load(const char* model_path, int n_ctx, int n_gpu_layers) 
     try {
         llama_model_params model_params = llama_model_default_params();
         model_params.n_gpu_layers = n_gpu_layers;
-        
+
         llama_model* model = llama_model_load_from_file(model_path, model_params);
         if (!model) {
             set_error("failed to load model");
             return nullptr;
         }
 
-        // Store model pointer (we'll free it later)
-        return reinterpret_cast<LlamaGoModel>(model);
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.embeddings = true;
+        ctx_params.n_ctx = n_ctx > 0 ? n_ctx : 2048;
+        ctx_params.n_batch = ctx_params.n_ctx;
+        ctx_params.n_ubatch = ctx_params.n_ctx;
+
+        llama_context* ctx = llama_init_from_model(model, ctx_params);
+        if (!ctx) {
+            llama_model_free(model);
+            set_error("failed to create context");
+            return nullptr;
+        }
+
+        auto* state = new llama_go_state();
+        state->model = model;
+        state->ctx = ctx;
+        state->n_embd = llama_model_n_embd(model);
+
+        return reinterpret_cast<LlamaGoModel>(state);
     } catch (const std::exception& e) {
         set_error(e.what());
         return nullptr;
@@ -42,56 +64,51 @@ LlamaGoModel llama_go_load(const char* model_path, int n_ctx, int n_gpu_layers) 
     }
 }
 
-void llama_go_free(LlamaGoModel model) {
-    if (model) {
-        llama_model* m = reinterpret_cast<llama_model*>(model);
-        llama_model_free(m);
+void llama_go_free(LlamaGoModel handle) {
+    if (handle) {
+        auto* state = reinterpret_cast<llama_go_state*>(handle);
+        if (state->ctx) llama_free(state->ctx);
+        if (state->model) llama_model_free(state->model);
+        delete state;
     }
 }
 
-int llama_go_embed(LlamaGoModel model, const char* text, float* embedding, int max_dims) {
-    if (!model || !text || !embedding || max_dims <= 0) {
+int llama_go_embed(LlamaGoModel handle, const char* text, float* embedding, int max_dims) {
+    if (!handle || !text || !embedding || max_dims <= 0) {
         set_error("invalid parameters");
         return -1;
     }
 
     try {
-        llama_model* m = reinterpret_cast<llama_model*>(model);
+        auto* state = reinterpret_cast<llama_go_state*>(handle);
+        std::lock_guard<std::mutex> lock(state->mu);
 
-        const llama_vocab* vocab = llama_model_get_vocab(m);
+        llama_context* ctx = state->ctx;
+        const llama_vocab* vocab = llama_model_get_vocab(state->model);
         if (!vocab) {
             set_error("failed to get vocab");
             return -1;
         }
 
-        // Create context for embeddings
-        llama_context_params ctx_params = llama_context_default_params();
-        ctx_params.embeddings = true;  // Enable embeddings
-
-        llama_context* ctx = llama_init_from_model(m, ctx_params);
-        if (!ctx) {
-            set_error("failed to create context");
+        int n_tokens = -llama_tokenize(vocab, text, (int32_t)strlen(text), nullptr, 0, true, false);
+        if (n_tokens <= 0) {
+            set_error("tokenization probe failed");
             return -1;
         }
 
-        // Tokenize input
-        std::vector<llama_token> tokens;
-        int n_tokens = llama_tokenize(vocab, text, (int32_t)strlen(text), nullptr, 0, true, false);
-        if (n_tokens < 0) {
-            llama_free(ctx);
+        std::vector<llama_token> tokens(n_tokens);
+        int actual = llama_tokenize(vocab, text, (int32_t)strlen(text), tokens.data(), (int32_t)tokens.size(), true, false);
+        if (actual < 0) {
             set_error("tokenization failed");
             return -1;
         }
+        n_tokens = actual;
 
-        tokens.resize(n_tokens);
-        n_tokens = llama_tokenize(vocab, text, (int32_t)strlen(text), tokens.data(), (int32_t)tokens.size(), true, false);
-        if (n_tokens < 0) {
-            llama_free(ctx);
-            set_error("tokenization failed");
-            return -1;
+        int n_ctx = (int)llama_n_ctx(state->ctx);
+        if (n_tokens > n_ctx) {
+            n_tokens = n_ctx;
         }
 
-        // Create batch: n_tokens, embd=0 (use token ids), n_seq_max=1
         llama_batch batch = llama_batch_init(n_tokens, 0, 1);
         batch.n_tokens = n_tokens;
         for (int i = 0; i < n_tokens; i++) {
@@ -99,34 +116,30 @@ int llama_go_embed(LlamaGoModel model, const char* text, float* embedding, int m
             batch.pos[i] = i;
             batch.n_seq_id[i] = 1;
             batch.seq_id[i][0] = 0;
-            batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;  // only last token outputs embedding
+            batch.logits[i] = 1;
         }
 
-        // Evaluate tokens (batch by value)
-        if (llama_decode(ctx, batch) < 0) {
-            llama_batch_free(batch);
-            llama_free(ctx);
+        int ret = llama_encode(ctx, batch);
+        llama_batch_free(batch);
+
+        if (ret < 0) {
             set_error("decode failed");
             return -1;
         }
 
-        llama_batch_free(batch);
-
-        // Get embedding (use model for n_embd; embeddings from context)
-        int n_embd = llama_model_n_embd(m);
-        const float* emb = llama_get_embeddings(ctx);
+        const float* emb = llama_get_embeddings_seq(ctx, 0);
         if (!emb) {
-            llama_free(ctx);
+            emb = llama_get_embeddings(ctx);
+        }
+        if (!emb) {
             set_error("failed to get embeddings");
             return -1;
         }
 
-        // Copy embedding
-        int copy_size = (n_embd < max_dims) ? n_embd : max_dims;
+        int copy_size = (state->n_embd < max_dims) ? state->n_embd : max_dims;
         std::memcpy(embedding, emb, copy_size * sizeof(float));
 
-        llama_free(ctx);
-        return n_embd;
+        return state->n_embd;
     } catch (const std::exception& e) {
         set_error(e.what());
         return -1;
@@ -140,4 +153,4 @@ const char* llama_go_get_error(void) {
     return g_last_error.c_str();
 }
 
-} // extern "C"
+}

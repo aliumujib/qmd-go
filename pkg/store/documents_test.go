@@ -79,3 +79,64 @@ func TestDocumentsCRUD(t *testing.T) {
 		t.Errorf("Expected 1 orphaned content deleted, got %d", affected)
 	}
 }
+
+func TestRecentDocuments(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "qmd-recent-*.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	s, err := NewStore(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer s.Close()
+
+	base := time.Date(2026, 7, 16, 5, 0, 0, 0, time.UTC)
+	seed := func(path, body string, mod time.Time) {
+		h := HashContent(body)
+		if err := s.InsertContent(h, body, mod); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.InsertDocument("claude-code", path, "T", h, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// two docs in project A (distinct mtimes) + one in project B
+	seed("-proj-A/old.md", "old body", base.Add(-2*time.Hour))
+	seed("-proj-A/new.md", "new body", base)
+	seed("-proj-B/other.md", "other body", base.Add(-time.Hour))
+
+	// filter to project A → only its 2 docs, newest first, with body joined
+	got, err := s.RecentDocuments("", "-proj-A", 10)
+	if err != nil {
+		t.Fatalf("RecentDocuments: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 project-A docs, got %d: %+v", len(got), got)
+	}
+	if got[0].Path != "-proj-A/new.md" || got[1].Path != "-proj-A/old.md" {
+		t.Fatalf("want newest-first, got %s then %s", got[0].Path, got[1].Path)
+	}
+	if got[0].Body != "new body" {
+		t.Fatalf("body not joined: %q", got[0].Body)
+	}
+
+	// limit caps the result
+	if lim, _ := s.RecentDocuments("", "-proj-A", 1); len(lim) != 1 || lim[0].Path != "-proj-A/new.md" {
+		t.Fatalf("limit=1 should return only the newest, got %+v", lim)
+	}
+
+	// empty filter lists across all projects (3), still newest-first
+	all, _ := s.RecentDocuments("", "", 10)
+	if len(all) != 3 || all[0].Path != "-proj-A/new.md" {
+		t.Fatalf("want 3 across all, newest first, got %d", len(all))
+	}
+
+	// LIKE metacharacters in the filter are matched literally, not as wildcards
+	if none, _ := s.RecentDocuments("", "proj-%", 10); len(none) != 0 {
+		t.Fatalf("LIKE wildcard must be escaped; want 0, got %d", len(none))
+	}
+}
