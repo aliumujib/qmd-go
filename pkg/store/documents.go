@@ -59,6 +59,67 @@ func (s *Store) FindActiveDocument(collection, path string) (*Document, error) {
 	return &doc, nil
 }
 
+// RecentDocument is a recency-listed document plus its content body. Unlike a search hit it
+// carries no score — the ordering IS the ranking (most-recently-modified first).
+type RecentDocument struct {
+	Collection string
+	Path       string
+	Title      string
+	Hash       string
+	ModifiedAt time.Time
+	Body       string
+}
+
+// RecentDocuments lists active documents whose path contains pathContains, most-recently-modified
+// first, capped at limit, with their content body. This is a pure index listing — no FTS, no
+// vectors — so callers wanting "the project's recent files" get recency, not semantic relevance.
+// pathContains is matched as a substring of documents.path (callers pass the encoded project path);
+// empty pathContains lists across all paths. collection empty means any collection.
+func (s *Store) RecentDocuments(collection, pathContains string, limit int) ([]RecentDocument, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	query := `
+		SELECT d.collection, d.path, d.title, d.hash, d.modified_at, c.doc
+		FROM documents d JOIN content c ON c.hash = d.hash
+		WHERE d.active = 1`
+	args := []any{}
+	if collection != "" {
+		query += ` AND d.collection = ?`
+		args = append(args, collection)
+	}
+	if pathContains != "" {
+		query += ` AND d.path LIKE ? ESCAPE '\'`
+		args = append(args, "%"+escapeLike(pathContains)+"%")
+	}
+	query += ` ORDER BY d.modified_at DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]RecentDocument, 0, limit)
+	for rows.Next() {
+		var doc RecentDocument
+		var modifiedAt string
+		if err := rows.Scan(&doc.Collection, &doc.Path, &doc.Title, &doc.Hash, &modifiedAt, &doc.Body); err != nil {
+			return nil, err
+		}
+		doc.ModifiedAt, _ = time.Parse(time.RFC3339, modifiedAt)
+		out = append(out, doc)
+	}
+	return out, rows.Err()
+}
+
+// escapeLike escapes the LIKE wildcards so a caller-supplied path substring is matched literally.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
 func (s *Store) UpdateDocument(id int64, title, hash string, modifiedAt time.Time) error {
 	_, err := s.DB.Exec(`UPDATE documents SET title = ?, hash = ?, modified_at = ? WHERE id = ?`,
 		title, hash, modifiedAt.Format(time.RFC3339), id)
