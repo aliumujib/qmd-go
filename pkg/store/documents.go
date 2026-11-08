@@ -19,10 +19,14 @@ func (s *Store) InsertContent(hash, content string, createdAt time.Time) error {
 	return err
 }
 
+// InsertDocument adds a document, or re-activates the inactive row a file left behind when it
+// stopped qualifying (UNIQUE(collection, path) keeps that row).
 func (s *Store) InsertDocument(collection, path, title, hash string, createdAt, modifiedAt time.Time) error {
 	_, err := s.DB.Exec(`
 		INSERT INTO documents (collection, path, title, hash, created_at, modified_at, active)
 		VALUES (?, ?, ?, ?, ?, ?, 1)
+		ON CONFLICT(collection, path) DO UPDATE SET
+			title = excluded.title, hash = excluded.hash, modified_at = excluded.modified_at, active = 1
 	`, collection, path, title, hash, createdAt.Format(time.RFC3339), modifiedAt.Format(time.RFC3339))
 	return err
 }

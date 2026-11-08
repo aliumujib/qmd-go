@@ -17,6 +17,9 @@ type IndexOptions struct {
 	Patterns []string // doublestar globs relative to the root; union
 	Exclude  []string // doublestar globs; a match skips the file
 	MaxBytes int64    // files larger than this are skipped (and deactivated if indexed); 0 = no cap
+	// Transform, when set, rewrites a file's content before it is hashed and stored (trace uses it
+	// to redact secrets). It must be deterministic, or unchanged files would look changed.
+	Transform func(content string) string
 }
 
 // OptionsFor turns a saved collection into index options.
@@ -42,7 +45,9 @@ func IndexFilesWith(s *store.Store, collectionName, rootPath string, o IndexOpti
 	seen := map[string]bool{}
 	var files []string
 	for _, p := range o.Patterns {
-		matches, err := doublestar.Glob(fsys, p)
+		// NoFollow: a symlink loop (`loop -> .`) must not recurse, and a symlinked dir must not pull
+		// files from outside the root into the index.
+		matches, err := doublestar.Glob(fsys, p, doublestar.WithNoFollow())
 		if err != nil {
 			return fmt.Errorf("pattern %q: %w", p, err)
 		}
@@ -72,12 +77,13 @@ func IndexFilesWith(s *store.Store, collectionName, rootPath string, o IndexOpti
 			continue
 		}
 		fullPath := filepath.Join(rootPath, relPath)
-		info, err := os.Stat(fullPath)
+		info, err := os.Lstat(fullPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error stating file %s: %v\n", fullPath, err)
 			continue
 		}
-		if info.IsDir() || (o.MaxBytes > 0 && info.Size() > o.MaxBytes) {
+		// Only regular files: never a symlink (it may point outside the root), never an empty file.
+		if !info.Mode().IsRegular() || info.Size() == 0 || (o.MaxBytes > 0 && info.Size() > o.MaxBytes) {
 			continue
 		}
 
@@ -89,6 +95,9 @@ func IndexFilesWith(s *store.Store, collectionName, rootPath string, o IndexOpti
 			continue
 		}
 		content := string(contentBytes)
+		if o.Transform != nil {
+			content = o.Transform(content)
+		}
 		hash := store.HashContent(content)
 		title := filepath.Base(relPath) // Simplified title extraction
 
