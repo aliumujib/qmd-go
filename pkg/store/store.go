@@ -47,8 +47,8 @@ func NewStore(dbPath string) (*Store, error) {
 		}
 	}
 
-	// Enable WAL mode via DSN
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_foreign_keys=on", dbPath)
+	// WAL mode via DSN; a second writer waits up to 30 s for the lock instead of failing at once.
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=30000", dbPath)
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
