@@ -4,6 +4,7 @@
 #include <vector>
 #include <mutex>
 #include <cstring>
+#include <cstdio>
 
 thread_local std::string g_last_error;
 
@@ -18,6 +19,16 @@ struct llama_go_state {
     std::mutex mu;
 };
 
+// llama.cpp logs ~6 KB of model and context info to stderr on every load. Keep errors only, so a
+// stdio MCP server's stderr stays quiet (QA A-MEM-12).
+static void quiet_log(enum ggml_log_level level, const char* text, void* /*user*/) {
+    if (level == GGML_LOG_LEVEL_ERROR && text) {
+        fputs(text, stderr);
+    }
+}
+
+static std::once_flag g_log_once;
+
 extern "C" {
 
 LlamaGoModel llama_go_load(const char* model_path, int n_ctx, int n_gpu_layers) {
@@ -25,6 +36,8 @@ LlamaGoModel llama_go_load(const char* model_path, int n_ctx, int n_gpu_layers) 
         set_error("model_path is NULL");
         return nullptr;
     }
+
+    std::call_once(g_log_once, [] { llama_log_set(quiet_log, nullptr); });
 
     try {
         llama_model_params model_params = llama_model_default_params();
